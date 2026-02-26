@@ -1,8 +1,4 @@
-"""3D viewport widget using pyvistaqt for VTK-backed rendering.
-
-VTK is initialized lazily after the window is shown to avoid blocking
-the Qt event loop on startup.
-"""
+"""3D viewport widget using pyvistaqt for VTK-backed rendering."""
 
 from __future__ import annotations
 
@@ -15,11 +11,22 @@ from ..core.toolpath.base import MoveType, Toolpath
 
 
 class Viewport(QWidget):
-    """Embeddable 3D viewport widget with lazy VTK initialization.
+    """Embeddable 3D viewport widget.
 
-    On startup, displays a 'Loading…' placeholder while the window
-    renders.  VTK is initialized on the first Qt event-loop tick after
-    the window becomes visible, keeping the app startup instant.
+    VTK is initialized in the background warmup phase so that by the time
+    the user clicks Load the render window is already live and the model
+    appears instantly.
+
+    Sequence
+    --------
+    1. App opens  → placeholder "Load a model…" shown
+    2. PrevistaWarmupWorker.done  → warm_up() called
+       - placeholder text changes to "Initialising 3D viewport…"
+       - QTimer.singleShot schedules _init_vtk for next event loop tick
+    3. _init_vtk runs on the main thread (OpenGL context setup)
+       - placeholder restored to "Load a model…" once done
+       - any pending geometry is flushed immediately
+    4. User loads model → show_mesh() renders directly; no freeze
     """
 
     def __init__(self, parent=None):
@@ -27,31 +34,42 @@ class Viewport(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Stack: index 0 = placeholder, index 1 = VTK interactor
         self._stack = QStackedWidget(self)
         layout.addWidget(self._stack)
 
-        self._placeholder = QLabel("Load an STL file to view the 3D model", self)
+        self._placeholder = QLabel("Load a model to view it in 3D", self)
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._placeholder.setStyleSheet("color: #888; font-size: 14px;")
         self._stack.addWidget(self._placeholder)
 
         self._plotter = None
+        self._pv = None
         self._mesh_actor = None
         self._toolpath_actors: list = []
 
-        # Deferred geometry waiting for VTK to be ready
+        # Geometry that arrived before VTK was ready
         self._pending_mesh: tuple | None = None
         self._pending_toolpaths: list | None = None
 
-        # VTK is initialized on demand (when show_mesh is first called)
-        # to keep startup instant.
+    # ------------------------------------------------------------------
+    # VTK initialisation (triggered by warmup worker, not by load)
+    # ------------------------------------------------------------------
 
-    # ------------------------------------------------------------------
-    # Lazy VTK setup
-    # ------------------------------------------------------------------
+    def warm_up(self) -> None:
+        """Called when PrevistaWarmupWorker.done fires.
+
+        Updates the placeholder label and schedules _init_vtk on the
+        next event-loop tick so the label repaint is visible first.
+        """
+        if self._plotter is not None:
+            return  # already initialised
+        self._placeholder.setText("Initialising 3D viewport…")
+        QTimer.singleShot(0, self._init_vtk)
 
     def _init_vtk(self) -> None:
+        if self._plotter is not None:
+            return  # guard against double-init
+
         try:
             import pyvista as pv
             from pyvistaqt import QtInteractor
@@ -67,15 +85,19 @@ class Viewport(QWidget):
         self._plotter.add_axes()
 
         self._stack.addWidget(self._plotter.interactor)
-        self._stack.setCurrentWidget(self._plotter.interactor)
+        # Stay on placeholder until we actually have geometry to show
+        self._placeholder.setText("Load a model to view it in 3D")
 
-        # Flush any geometry that arrived before VTK was ready
+        # Flush geometry that loaded while we were initialising
         if self._pending_mesh is not None:
-            self.show_mesh(*self._pending_mesh)
+            verts, faces = self._pending_mesh
             self._pending_mesh = None
+            self.show_mesh(verts, faces)
+
         if self._pending_toolpaths is not None:
-            self.show_toolpath(self._pending_toolpaths)
+            tps = self._pending_toolpaths
             self._pending_toolpaths = None
+            self.show_toolpath(tps)
 
     # ------------------------------------------------------------------
     # Public API
@@ -84,9 +106,8 @@ class Viewport(QWidget):
     def show_mesh(self, vertices: np.ndarray, faces: np.ndarray) -> None:
         """Display a trimesh-style mesh (Nx3 vertices, Mx3 face indices)."""
         if self._plotter is None:
+            # VTK not ready yet — stash and wait for warm_up() to flush
             self._pending_mesh = (vertices, faces)
-            self._placeholder.setText("Initializing 3D viewport…")
-            QTimer.singleShot(0, self._init_vtk)
             return
 
         if self._mesh_actor is not None:
@@ -102,6 +123,9 @@ class Viewport(QWidget):
             mesh, color="lightblue", opacity=0.6, show_edges=False,
         )
         self._plotter.reset_camera()
+
+        # Switch from placeholder to the live VTK view
+        self._stack.setCurrentWidget(self._plotter.interactor)
 
     def show_toolpath(self, toolpaths: list[Toolpath]) -> None:
         """Overlay toolpath lines on the viewport."""

@@ -48,9 +48,12 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._connect_signals()
 
-        # Pre-import pyvista/VTK off the main thread so the first
-        # viewport render is near-instant when the user actually loads a model.
+        # Pre-import pyvista/VTK modules in a background thread, then
+        # immediately initialise the QtInteractor (OpenGL context) on the
+        # main thread once imports are done.  This means the ~3s VTK freeze
+        # happens right after launch — not when the user clicks Load.
         self._warmup = PrevistaWarmupWorker(parent=self)
+        self._warmup.done.connect(self._viewport.warm_up)
         self._warmup.start()
 
     # ------------------------------------------------------------------
