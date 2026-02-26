@@ -31,7 +31,7 @@ class Viewport(QWidget):
         self._stack = QStackedWidget(self)
         layout.addWidget(self._stack)
 
-        self._placeholder = QLabel("Loading 3D viewport…", self)
+        self._placeholder = QLabel("Load an STL file to view the 3D model", self)
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._placeholder.setStyleSheet("color: #888; font-size: 14px;")
         self._stack.addWidget(self._placeholder)
@@ -44,8 +44,8 @@ class Viewport(QWidget):
         self._pending_mesh: tuple | None = None
         self._pending_toolpaths: list | None = None
 
-        # Initialize VTK on the next event-loop tick (after window shows)
-        QTimer.singleShot(0, self._init_vtk)
+        # VTK is initialized on demand (when show_mesh is first called)
+        # to keep startup instant.
 
     # ------------------------------------------------------------------
     # Lazy VTK setup
@@ -85,6 +85,8 @@ class Viewport(QWidget):
         """Display a trimesh-style mesh (Nx3 vertices, Mx3 face indices)."""
         if self._plotter is None:
             self._pending_mesh = (vertices, faces)
+            self._placeholder.setText("Initializing 3D viewport…")
+            QTimer.singleShot(0, self._init_vtk)
             return
 
         if self._mesh_actor is not None:
