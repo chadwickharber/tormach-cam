@@ -1,13 +1,24 @@
-"""STL mesh loading via trimesh with basic repair."""
+"""Mesh loading via trimesh with repair and display decimation.
+
+Supports STL, OBJ, PLY, OFF, and other trimesh-compatible formats.
+"""
 
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 import trimesh
+
+# Formats trimesh can load natively
+SUPPORTED_EXTENSIONS = {
+    ".stl", ".obj", ".ply", ".off", ".glb", ".gltf", ".3mf",
+}
+
+# Max face count for the 3D viewport (full mesh kept for CAM)
+DISPLAY_MAX_FACES = 50_000
 
 
 @dataclass
@@ -17,10 +28,12 @@ class MeshModel:
     mesh: trimesh.Trimesh
     source_path: Path
     was_repaired: bool = False
+    # Lightweight copy for the viewport (may be decimated)
+    _display_verts: np.ndarray = field(default=None, repr=False)
+    _display_faces: np.ndarray = field(default=None, repr=False)
 
     @property
     def bounds(self) -> np.ndarray:
-        """Return (2, 3) array: [[xmin,ymin,zmin],[xmax,ymax,zmax]]."""
         return self.mesh.bounds
 
     @property
@@ -35,28 +48,52 @@ class MeshModel:
     def z_max(self) -> float:
         return float(self.mesh.bounds[1, 2])
 
+    @property
+    def display_vertices(self) -> np.ndarray:
+        if self._display_verts is None:
+            self._build_display_mesh()
+        return self._display_verts
+
+    @property
+    def display_faces(self) -> np.ndarray:
+        if self._display_faces is None:
+            self._build_display_mesh()
+        return self._display_faces
+
     def translate_to_origin(self) -> None:
-        """Translate mesh so its bounding-box minimum is at the origin."""
         self.mesh.apply_translation(-self.mesh.bounds[0])
+        # Invalidate display cache
+        self._display_verts = None
+        self._display_faces = None
+
+    def _build_display_mesh(self) -> None:
+        """Create a decimated copy for viewport rendering."""
+        m = self.mesh
+        if len(m.faces) > DISPLAY_MAX_FACES:
+            ratio = DISPLAY_MAX_FACES / len(m.faces)
+            try:
+                m = m.simplify_quadric_decimation(DISPLAY_MAX_FACES)
+            except Exception:
+                # Fallback: subsample faces
+                indices = np.linspace(
+                    0, len(self.mesh.faces) - 1,
+                    DISPLAY_MAX_FACES, dtype=int,
+                )
+                m = trimesh.Trimesh(
+                    vertices=self.mesh.vertices,
+                    faces=self.mesh.faces[indices],
+                    process=False,
+                )
+        self._display_verts = np.ascontiguousarray(
+            m.vertices.astype(np.float64)
+        )
+        self._display_faces = np.ascontiguousarray(m.faces)
 
 
-def load_stl(path: Path, repair: bool = True) -> MeshModel:
-    """Load an STL (or any trimesh-supported mesh) from *path*.
+def load_mesh(path: Path, repair: bool = True) -> MeshModel:
+    """Load a mesh from *path* (STL, OBJ, PLY, OFF, 3MF, etc.).
 
-    Parameters
-    ----------
-    path:
-        Path to the mesh file.
-    repair:
-        When True, attempt to fill holes and fix winding on non-watertight
-        meshes and emit a warning if the mesh required repair.
-
-    Raises
-    ------
-    FileNotFoundError:
-        If *path* does not exist.
-    ValueError:
-        If the file cannot be parsed as a mesh.
+    Raises FileNotFoundError or ValueError on failure.
     """
     path = Path(path)
     if not path.exists():
@@ -80,4 +117,11 @@ def load_stl(path: Path, repair: bool = True) -> MeshModel:
             )
         was_repaired = True
 
-    return MeshModel(mesh=mesh, source_path=path, was_repaired=was_repaired)
+    model = MeshModel(mesh=mesh, source_path=path, was_repaired=was_repaired)
+    # Pre-build the decimated display mesh (this runs in the worker thread)
+    model._build_display_mesh()
+    return model
+
+
+# Keep backward compat alias
+load_stl = load_mesh

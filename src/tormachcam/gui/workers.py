@@ -3,27 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from ..core.job import Job
-from ..core.toolpath.base import Toolpath
 
 
 class ToolpathWorker(QThread):
-    """Runs Job.compute_toolpaths() in a background thread.
-
-    Signals
-    -------
-    finished(list[Toolpath]):
-        Emitted when toolpath computation completes successfully.
-    error(str):
-        Emitted when an exception is raised during computation.
-    progress(str):
-        Emitted with a status message during processing.
-    """
-
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
@@ -41,25 +27,51 @@ class ToolpathWorker(QThread):
                 f"{sum(t.total_points for t in toolpaths)} points"
             )
             self.finished.emit(toolpaths)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.error.emit(str(exc))
 
 
 class LoadModelWorker(QThread):
-    """Loads an STL file in a background thread."""
+    """Loads a mesh file in a background thread.
 
-    finished = pyqtSignal(object)  # MeshModel
+    Also pre-builds the decimated display mesh so the viewport receives
+    a lightweight vertex/face array rather than the raw full-res mesh.
+    """
+
+    finished = pyqtSignal(object)   # MeshModel
     error = pyqtSignal(str)
+    progress = pyqtSignal(str)
 
     def __init__(self, path: Path, parent=None):
         super().__init__(parent)
         self._path = path
 
     def run(self) -> None:
-        from ..core.model import load_stl
+        from ..core.model import load_mesh
 
         try:
-            model = load_stl(self._path)
+            self.progress.emit(f"Loading {self._path.name}…")
+            model = load_mesh(self._path)   # decimation pre-built inside
             self.finished.emit(model)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.error.emit(str(exc))
+
+
+class PrevistaWarmupWorker(QThread):
+    """Pre-imports pyvista/pyvistaqt in a background thread.
+
+    Module-level imports (loading C extensions, reading shader files) are
+    the slowest part of VTK startup.  By doing them off the main thread
+    we ensure they're done before the user clicks Load, so the viewport
+    widget creation is near-instant when it's actually needed.
+    """
+
+    done = pyqtSignal()
+
+    def run(self) -> None:
+        try:
+            import pyvista  # noqa: F401
+            import pyvistaqt  # noqa: F401
+        except ImportError:
+            pass
+        self.done.emit()

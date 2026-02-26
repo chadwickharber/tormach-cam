@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ...config.defaults import build_default_tool_library
-from ...core.tool import Tool
+from ...core.tool import Tool, ToolLibrary
 
 
 class ToolPanel(QWidget):
@@ -57,6 +57,10 @@ class ToolPanel(QWidget):
         # Initialize with first tool
         if self._lib.list_tools():
             self._populate(self._lib.list_tools()[0])
+
+    def tool_library(self) -> ToolLibrary:
+        """Return the underlying ToolLibrary (for recommendation engine)."""
+        return self._lib
 
     def current_tool(self) -> Tool | None:
         t = self._combo.currentData()

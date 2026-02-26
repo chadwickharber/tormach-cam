@@ -13,20 +13,22 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ...core.model import MeshModel
-
 
 class ModelPanel(QWidget):
-    """Displays model information and provides a load button."""
+    """Displays model information and provides a load button.
 
-    model_loaded = pyqtSignal(object)  # MeshModel
+    Emits ``load_requested`` with the chosen Path; the actual loading
+    happens off the main thread in MainWindow via LoadModelWorker.
+    """
+
+    load_requested = pyqtSignal(object)  # pathlib.Path
 
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QFormLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
 
-        self._load_btn = QPushButton("Load STL...")
+        self._load_btn = QPushButton("Load Model...")
         self._load_btn.clicked.connect(self._on_load)
         layout.addRow(self._load_btn)
 
@@ -42,13 +44,19 @@ class ModelPanel(QWidget):
         layout.addRow("Extents:", self._extents_lbl)
         layout.addRow("Watertight:", self._watertight_lbl)
 
-    def update_model(self, model: MeshModel) -> None:
+    def set_loading(self, loading: bool) -> None:
+        """Disable the load button and show a spinner-style label while busy."""
+        self._load_btn.setEnabled(not loading)
+        self._load_btn.setText("Loading…" if loading else "Load Model...")
+
+    def update_model(self, model) -> None:
+        """Populate the info labels from a fully-loaded MeshModel."""
         self._name_lbl.setText(model.source_path.name)
-        self._verts_lbl.setText(str(len(model.mesh.vertices)))
-        self._faces_lbl.setText(str(len(model.mesh.faces)))
+        self._verts_lbl.setText(f"{len(model.mesh.vertices):,}")
+        self._faces_lbl.setText(f"{len(model.mesh.faces):,}")
         ext = model.extents
         self._extents_lbl.setText(
-            f"{ext[0]:.3f} x {ext[1]:.3f} x {ext[2]:.3f}"
+            f"{float(ext[0]):.3f} x {float(ext[1]):.3f} x {float(ext[2]):.3f}"
         )
         wt = model.mesh.is_watertight
         suffix = " (repaired)" if model.was_repaired else ""
@@ -57,13 +65,10 @@ class ModelPanel(QWidget):
     def _on_load(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Load STL File",
+            "Load 3D Model",
             "",
-            "STL Files (*.stl *.STL);;All Files (*)",
+            "3D Models (*.stl *.STL *.obj *.OBJ *.ply *.PLY "
+            "*.glb *.GLB *.gltf *.GLTF *.3mf *.3MF);;All Files (*)",
         )
         if path:
-            from ...core.model import load_stl
-
-            model = load_stl(Path(path))
-            self.update_model(model)
-            self.model_loaded.emit(model)
+            self.load_requested.emit(Path(path))
