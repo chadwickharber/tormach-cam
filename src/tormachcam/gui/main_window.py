@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
@@ -11,6 +12,8 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QStatusBar,
 )
+
+log = logging.getLogger(__name__)
 
 from ..core.job import Job
 from ..core.model import MeshModel
@@ -112,6 +115,7 @@ class MainWindow(QMainWindow):
 
     def _start_load_worker(self, path: Path) -> None:
         """Kick off a background thread to load + decimate the mesh."""
+        log.info("Starting load worker for %s", path)
         self._model_panel.set_loading(True)
         self._gcode_panel.clear()
         self._status.showMessage(f"Loading {path.name}…")
@@ -123,6 +127,11 @@ class MainWindow(QMainWindow):
         self._load_worker.start()
 
     def _on_model_loaded(self, model: MeshModel) -> None:
+        log.info(
+            "Model loaded: %d verts, %d faces, display %d faces",
+            len(model.mesh.vertices), len(model.mesh.faces),
+            len(model.display_faces),
+        )
         self._model = model
         self._job.model = model
 
@@ -134,19 +143,18 @@ class MainWindow(QMainWindow):
             model.bounds, margin=0.1, z_top=0.0
         )
 
-        # Display the *decimated* mesh in the viewport
+        # Display the decimated mesh — that's it, no computation yet
+        log.info("Sending display mesh to viewport")
         self._viewport.show_mesh(model.display_vertices, model.display_faces)
 
         self._status.showMessage(
             f"Loaded {model.source_path.name}  "
-            f"({len(model.mesh.vertices):,} verts, "
-            f"{len(model.mesh.faces):,} faces)"
+            f"({len(model.mesh.vertices):,} verts, {len(model.mesh.faces):,} faces)"
+            f"  —  select a strategy and click Compute Toolpaths"
         )
 
-        # Auto-recommend tools and generate G-code
-        self._run_auto_recommend()
-
     def _on_load_error(self, message: str) -> None:
+        log.error("Load error: %s", message)
         self._model_panel.set_loading(False)
         self._status.showMessage(f"Error: {message}")
         QMessageBox.critical(self, "Load Error", message)

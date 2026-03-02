@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+import traceback
 from pathlib import Path
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from ..core.job import Job
+
+log = logging.getLogger(__name__)
 
 
 class ToolpathWorker(QThread):
@@ -20,14 +24,17 @@ class ToolpathWorker(QThread):
 
     def run(self) -> None:
         try:
-            self.progress.emit("Slicing model...")
+            log.info("ToolpathWorker: starting")
+            self.progress.emit("Slicing model…")
             toolpaths = self._job.compute_toolpaths()
             self.progress.emit(
                 f"Done: {len(toolpaths)} operations, "
                 f"{sum(t.total_points for t in toolpaths)} points"
             )
+            log.info("ToolpathWorker: done — %d toolpaths", len(toolpaths))
             self.finished.emit(toolpaths)
         except Exception as exc:
+            log.error("ToolpathWorker: %s\n%s", exc, traceback.format_exc())
             self.error.emit(str(exc))
 
 
@@ -50,10 +57,13 @@ class LoadModelWorker(QThread):
         from ..core.model import load_mesh
 
         try:
+            log.info("LoadModelWorker: starting %s", self._path)
             self.progress.emit(f"Loading {self._path.name}…")
-            model = load_mesh(self._path)   # decimation pre-built inside
+            model = load_mesh(self._path)
+            log.info("LoadModelWorker: done — emitting finished")
             self.finished.emit(model)
         except Exception as exc:
+            log.error("LoadModelWorker: %s\n%s", exc, traceback.format_exc())
             self.error.emit(str(exc))
 
 
